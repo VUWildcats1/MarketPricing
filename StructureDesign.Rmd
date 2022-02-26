@@ -1,0 +1,473 @@
+---
+title: "Job Architecture - Structure Design"
+output: html_document
+description:
+  Generate some helpful outputs to review and assess a new or revised salary structure, based upon market data.
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+```
+
+## Introduction
+
+As someone who has spent their nearly 20+ year career in compensation, while having a passion for statistics and analysis, I have gone through the experience of working to update and create new salary structures. I authored this R script for others who may want a simple way to pull together market data and provide insights to assist in creating or updating a salary structure.
+
+While Excel is a primary tool that compensation professionals use, it has limitations, one of which being ability to quickly do calculations with significant sized data sets. That is something that makes R ideal, as it is a powerful freeware application, that comes frills free.
+
+#Getting Started
+To begin, you will want to load the desired packages. If you are new to R, a brief explanation of how the base application works and the concept of packages. As R is an open source software that is popular with data miners, statisticians and data scientists. As it is open source, anyone who does development can create an extension to the base code, with functions and/or data sets. These extensions are called packages. 
+
+A package only needs to be installed once, however, simply installing does not mean it is available. With these packages, you have to call them. Below are two chunks of code; the first is to install the desired packages. If the package is already install, R may generate an error message stating the packages are already loaded.
+
+```{r Install packages - One time only, message=FALSE,results='hide'}
+install.packages("dplyr", repos = "http://cran.us.r-project.org")
+install.packages("readxl", repos = "http://cran.us.r-project.org")
+install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+install.packages("stringr", repos = "http://cran.us.r-project.org")
+install.packages("scales", repos = "http://cran.us.r-project.org")
+```
+
+Now that the packages have been installed, we can load them.
+```{r load the desired packages}
+library(openxlsx) #Used to read in Excel documents
+library(dplyr) #Used to do data manipulation
+library(ggplot2) #used for visualization design
+library(stringr) #used for visualization design
+library(scales) #used for visualization design
+```
+
+## Installing the sample data set
+
+For the purposes of this effort, I created a fake sample set, similar to what would be seen from a salary survey output. It is an excel document with 23 columns, with data points such as; Job Code, Job Function, Band, Level, Salary details, TTC details, and Performance Incentive details. All the data was randomly generated, with some logic included to mirror different pay details by level and by job function.
+
+```{r read in sample survey data}
+Survey<- read.xlsx("https://img1.wsimg.com/blobby/go/efc5534a-5f28-4838-b3e1-5164cfb94a13/downloads/SampleSurvey.xlsx?ver=1645870868209")
+```
+
+If the dataset has any blank values, it will cause an issue as you progress. There are really two options; remove from the start all rows that contain a blank value or address the blank values where applicable. My preference is the latter, as with salary survey data, there may be a value for one field of information, however, another field may be null.
+
+## Initial Structure output based upon survey data
+
+One approach that is used for salary structure design is creating linear salary structures. What is meant by a linear salary structure? That is where the midpoint progressions (percentage differ from a midpoint to the midpoint of the next highest grade) are constant throughout the whole structure.
+
+First, we must set how many grades we want in this initial structure. For this example, I am using 15 grades.
+
+```{r Linear Structure (Constant Midpoint)}
+NbrGrade<-15 #replace the number 15 with the number of grades you wish to consider for the initial structure design
+```
+
+Now that we have set the number of grades, let's take the approach of looking at the data, and calculating the percentile data points for the lowest and highest grade. Another way to say it; if we wanted a five grade approach, when considering the full data set, what would the 10th and 90th percentile values of the Salary50th data point. Do those numbers seem extreme? Well, the effort is to look for the midpoint of one fifth of the structure; we want grade 1 to be the Salary50th that captures from the lowest to the 20th percentile value, grade 2 to be the Salary50th from 20th to 40th percentile value and so on.
+
+As we set the grades at 15, the below code will find 6.667th and 93.333th percentile value from the Salary50th data point. However, before running this chunk of code, note the inclusion of the na.rm = TRUE segment of the code. This is addressing the null / missing values.
+
+```{r find the midpoints for lowest and highest grade}
+TopBottom<-Survey%>%
+  summarise(Lowest=quantile(Salary50th, probs = 1/(NbrGrade*2),na.rm = TRUE),
+            Highest=quantile(Salary50th, probs = 1-(1/(NbrGrade*2)),na.rm = TRUE))
+TopBottom
+```
+As we see, the Lowest (6.667th) salary survey data point is 29,548.61 and the highest (93.33rd) salary survey data point is 189,400.30. The lowest value, 29,548.61 will be the midpoint for grade 1, and the highest value, 189,400.30 will be the midpoint for grade 15.
+
+Now we need to get midpoints for grades 2-14. This is where we now have to find the percent that will get from 29,548.61 to 189,400.30 in 14 steps. This is done through the same way a compound interest number is obtained. The below chunk of code does just this; it looks at the midpoints we set for grade 1 and 15, and the number of grades desired and calculates out that Constant Midpoint Progression percentage.
+
+```{r Determine the constant midpoint progression}
+ConstantMidPtProg <- as.numeric((TopBottom$Highest/TopBottom$Lowest)^(1/(NbrGrade-1))-1) 
+ConstantMidPtProg
+```
+As you see, the percentage to get from the grade 1 to grade 15 in a constant manner is 14.19095%. If you are at all like me (a little bit of a skeptic), you are taking that percentage, going over to excel and typing in 32,192.12 and multiplying it by 1.134487 for 14 steps. Grade 15 from the calculation aligns perfectly. However, With mathematics, precision and rounding can always do a little bit of tripping items up, so there may be some instances where the calculation results in being a few cents off.
+
+Now that we have the constant midpoint percentage, R can show you what the 15 grade structure would look like. The code will first create an item called Structure, which to start off with, will be just the value for grade 1 (which reminder, was the 6.67th percentile value of all the values in the Salary50th column). The code then builds the values for grades 2 through 15 as an item called Structure_Above; code then 'binds' the two datasets together and removes the Structure_Above data frame. It retitles the column header, adds a column that identifies the grade numbers, combines that with the midpoints, so all that remains related to the structures is a single data frame called structure, which has the midpoints for grades 1 through 15.
+
+```{r Building the structure}
+Midpoints<-TopBottom$Lowest
+Midpoints_Above<-as.data.frame((1+ConstantMidPtProg)^(1:(NbrGrade-1))*TopBottom$Lowest)
+Midpoints<-rbind(Midpoints,Midpoints_Above)
+rm(Midpoints_Above)
+colnames(Midpoints)[1]<-"Midpoint"
+Grade<-as.factor(1*seq_len(nrow(Midpoints)))
+cbind(Grade,Midpoints)
+```
+So now you have your structure based upon a constant midpoint progression. However, companies do typically avoid having a salary structure that includes non-whole numbers and in many cases, like a smoothed approach to the numbers, such as round to the nearest multiple of x. We have a code for that.
+
+## Smoothing the Initial Structure
+This is a pretty easy process to do. We simply have to create a function, that rounds to the nearest multiple, set the desired multiple, and get the output of the rounded structure.
+
+```{r Rounding the structure}
+mround <- function(number, multiple) multiple * round(number/multiple)
+Midpoints_Rounded<-mround(Midpoints,100)
+cbind(Grade,Midpoints_Rounded)
+```
+## Setting Minimum and Maximum
+So if the midpoints are set, it is now time to set the minimum and the maximum. 
+
+One theme I have seen more times that I would like to have is where the variance from minimum to midpoint does not equal the variance from midpoint to maximum. 
+
+Why does this occur? Because of the rounding to the nearest multiple on both sides. I shared above that rounding can cause issues and that is the case here. 
+
+That is why, I am an advocate for setting the minimum and then taking the variance from minimum to midpoint, and adding that variance to the midpoint to get the maximum. This will result in the midpoint being exactly 50% when doing position in range calculation.
+
+Using the below code, a single range width can be set. There are differing views on this; as some companies prefer a set range width regardless of level, while others have an approach where the range width expands the higher up the grade. I am on team expanding range-width.
+
+```{r set Range Width}
+RangeWidth<-.4
+```
+Now that the range width has been set, this code chunk will build the minimum and maximum, as well as show you what the compa-ratio is for those values.
+
+```{r Minimum & Maximum}
+Structure_Rounded<-Midpoints_Rounded%>%mutate(Minimum=(Midpoint/(1+(.5*RangeWidth))))
+Structure_Rounded<-mround(Structure_Rounded,100)
+Structure_Rounded$Maximum<-Structure_Rounded$Midpoint-Structure_Rounded$Minimum+Structure_Rounded$Midpoint
+Structure_Rounded<-Structure_Rounded[,c(2,1,3)]
+Structure_Rounded<-cbind(Grade,Structure_Rounded)
+Structure_Rounded$MinCR<-round(Structure_Rounded$Minimum/Structure_Rounded$Midpoint,4)
+Structure_Rounded$MaxCR<-round(Structure_Rounded$Maximum/Structure_Rounded$Midpoint,4)
+Structure_Rounded
+```
+
+The 15 grade range now has minimum and maximums, based upon a consistent range width. For some, this is enough. For others, they may want to see how these ranges look visually. I have constructed a lollipop chart, that shows how each range aligns to one another visually.
+```{r Range Visualization}
+ggplot(Structure_Rounded) +
+  geom_segment( aes(x=Grade, xend=Grade, y=Minimum, yend=Maximum), color="grey") +
+  geom_point( aes(x=Grade, y=Minimum ), color="#FD5A1E", size=3,shape=23,fill="#27251F" ) +
+  geom_point( aes(x=Grade, y=Maximum ), color="#FD5A1E", size=3,shape=23,fill="#27251F" ) +
+  coord_flip()+
+  ylab("")+
+  xlab("Grade")+
+  scale_y_continuous(label=comma, breaks=seq(0,290000,20000))
+```
+
+As was discussed above, there is a prevalent thought that as the grades get higher, the range width should expand. A common reasoning for this is that as someone starts lower in the organization, their opportunity to advance throughout the range is improved. So the higher up an employee gets in the grading structure, the intent is there is less mobility in progression, and longevity in the role becomes paramount. While the thought of widening range widths as progression through the structure occurs, there is differing opinions on just what those range widths should be. A good blog related to this is from PeopleCentre, https://peoplecentre.wordpress.com/2014/09/29/salary-structure-range-spread/ where it is is clear that there is nothing consistent around perspectives on this.
+
+Thus, I am setting up 3 range widths; one at 40% for lower graded roles (grades 1-5), one at 55% for middle graded roles (grades 5-10), and one at 70% for higher graded roles (11-15). 
+
+```{r Minimum and Maximum with varied range widths}
+RangeWidth1<-.4
+RangeWidth2<-.55
+RangeWidth3<-.70
+
+Structure_Rounded_Var_RW<-Structure_Rounded[,c(2,3,4)]
+Structure_Rounded_Var_RW = Structure_Rounded_Var_RW%>%
+  mutate(Minimum = ifelse(as.integer(Grade)<6, Midpoint/(1+(.5*RangeWidth1)),
+                          ifelse(as.integer(Grade)<11,Midpoint/(1+(.5*RangeWidth2)),Midpoint/(1+(.5*RangeWidth3)))))
+Structure_Rounded_Var_RW<-mround(Structure_Rounded_Var_RW,50)
+Structure_Rounded_Var_RW$Maximum<-Structure_Rounded_Var_RW$Midpoint-Structure_Rounded_Var_RW$Minimum+Structure_Rounded_Var_RW$Midpoint
+Structure_Rounded_Var_RW<-cbind(Grade,Structure_Rounded_Var_RW)
+Structure_Rounded_Var_RW$MinCR<-round(Structure_Rounded_Var_RW$Minimum/Structure_Rounded_Var_RW$Midpoint,4)
+Structure_Rounded_Var_RW$MaxCR<-round(Structure_Rounded_Var_RW$Maximum/Structure_Rounded_Var_RW$Midpoint,4)
+Structure_Rounded_Var_RW
+```
+
+Similar to the other structure, let's consider a visualization.
+
+```{r Range Visualization - Varied Range Width}
+ggplot(Structure_Rounded_Var_RW) +
+  geom_segment( aes(x=Grade, xend=Grade, y=Minimum, yend=Maximum), color="grey") +
+  geom_point( aes(x=Grade, y=Minimum ), color="#FD5A1E", size=3,shape=23,fill="#27251F" ) +
+  geom_point( aes(x=Grade, y=Maximum ), color="#FD5A1E", size=3,shape=23,fill="#27251F" ) +
+  coord_flip()+
+  ylab("")+
+  xlab("Grade")+
+  scale_y_continuous(label=comma, breaks=seq(0,290000,20000))
+```
+
+Something may initially look a little odd about this image, as the minimum line marker seem a bit out of place at certain levels. Those places coincide with where the range width was adjusted (grades 6 and 11).
+
+## Setting Structures based upon alignment of Band & Level to Grade
+
+A company may decide that setting a linear structure does not align to their philosophy and may pursue an approach of aligning their grades to survey market matches, based upon the survey's band (support, professional, management) and the level within those bands (i.e. Management 1, Professional 2). This can also be done through R code. The first thing to consider is how well the band / levels align and that can help determine number of grades in the structure. This is very much the art side of compensation.
+
+Looking at the aggregation of the data can be done easily by running the below chunk, which takes the survey data, and does an simple average of the Salary50th data. In excel terms, it is just like the AverageIf function.
+
+```{r summary of aggregated salary50th}
+SalaryByBand_Level<-Survey%>%
+  group_by(Band_Level)%>%
+  summarise(Salary=mean(Salary50th,na.rm = TRUE))%>%
+  arrange(Salary)
+
+SalaryByBand_Level
+```
+
+As was noted prior, this is where some art comes into play. I might take out a scratch piece of paper and start to build an alignment document of grouped band_level terms. In looking at the first two rows of data, it may seem like considering grouping the O1 and O2, based upon this data. However, a quick mental calculations tells me that it differs by greater than 10%. Additionally, it might be helpful to have added to this summary the average count for org and incumbent for the survey roles in the band_level. With a few additional lines in the chunk, we can achieve this.
+
+```{r summary of aggregated salary50th with counts}
+SalaryByBand_Level<-Survey%>%
+  group_by(Band_Level)%>%
+  summarise(Salary=mean(Salary50th,na.rm = TRUE),
+            OrgCount=mean(SalaryOrgCount,na.rm = TRUE),
+            IncCount=mean(SalaryIncCount,na.rm = TRUE))%>%
+  arrange(Salary)%>%
+  mutate(Progression = (Salary / lag(Salary))-1)
+
+SalaryByBand_Level
+```
+
+As O1 is the lowest, there is no progression calculation, however, we see that O2 is ~13.3 higher than O1. We also see a ~13.4 jump from O2 to the next highest aggregate, A1. So on that alignment scratch pad, O1 = grade 1, O2 = grade 2 and A1 = grade 3. 
+
+We do see that O3 is only ~.011 higher than the A1, so O3 best aligns to grade 3. You continue to do this practice until you feel fairly comfortable. That all Band_Levels are aligned to a grade.
+
+When looking at this data, an approach could be to do 12 grades. Now the coding needs to occur to put the grades into the data set. The first part of the below chunk looks for all unique values of Band_Level (25 unique Band_Levels).
+```{r aligning Band_Level to Grade}
+BandLevel_Unique<-unique(Survey$Band_Level)
+BandLevel_Unique
+```
+
+The next part is to align a numeric grade to these 25 Band_Levels. The code will create a vector call Grade_UniqueLeve and begin to assign, in parallel order to the above BandLevel_Unique vector, the grades. First band_level is A1, which aligned to grade 3; next is A2 and align to grade 4 and continue this process until you have aligned all 25 band_level to a grade.
+```{r Set grades}
+Grade_UniqueLevel<-c(3,4,5,6,7,8,9,10,11,12,1,2,3,4,5,6,7,8,9,10,5,6,7,8,9)
+Grade_UniqueLevel
+```
+
+We now combine the two vectors into a dataframe, called Grade_Band_Level, do some cleanup on column titles and see the results.
+```{r Combine grade and band_Level}
+Grade_BandLevel<-data.frame(Grade_UniqueLevel,BandLevel_Unique)
+Grade_BandLevel$Grade_UniqueLevel<-as.factor(Grade_BandLevel$Grade_UniqueLevel)
+colnames(Grade_BandLevel)<-c("Grade","Band_Level")
+Grade_BandLevel
+```
+
+Now that we have the alignment of grade to band_level, we need to bring the alignment back to the Survey data.A simple merge code achieves this.
+
+```{r Merge Grade into Survey}
+Survey<-merge(Survey,Grade_BandLevel,by="Band_Level")
+```
+
+We have our alignment complete, and it is now aligned to the survey data. The data can now be pulled into a summary. 
+
+However, we can look at the alignments in a few different ways; 
+
+* Take the simple average of the Salary50th, where a role that has limited incumbents or organizations aligned to it brings as much impact to the structure design as a role that is quite prevalent or 
+* Do weighted averages for both incumbents and organization
+
+Why not have all three?
+
+```{r Build Market Midpoints}
+Market_Midpoints<-Survey%>%
+  group_by(Grade)%>%
+  summarise(SimpleAvgOf50th=mean(Salary50th,na.rm = TRUE),
+            WeightedAvgof50_Inc=weighted.mean(Salary50th, SalaryIncCount,na.rm = TRUE),
+            WeightedAvgof50_Org=weighted.mean(Salary50th, SalaryOrgCount,na.rm = TRUE))%>%
+            mutate(ProgressionSimpleAvg = (SimpleAvgOf50th / lag(SimpleAvgOf50th))-1,
+                   ProgressionWeightedInc = (WeightedAvgof50_Inc / lag(WeightedAvgof50_Inc))-1,
+                   ProgressionWeightedOrg = (WeightedAvgof50_Org / lag(WeightedAvgof50_Org))-1)
+
+Market_Midpoints
+```
+
+There is now a market based salary midpoints, with looks by simple average and weighted by incumbents and organizations, along progressions by the three midpoint views. Similar to the linear midpoint progression view, we can initially smooth using the same logic as above.
+
+```{r Rounding the Market structure}
+Market_Midpoints_Rounded<-mround(Market_Midpoints[,c(2:4)],100)
+Grade_Market<-as.factor(1:12)
+Market_Midpoints_Rounded<-cbind(Grade_Market,Market_Midpoints_Rounded)
+colnames(Market_Midpoints_Rounded)[1]<-"Grade"
+Market_Midpoints_Rounded$Grade<-Market_Midpoints_Rounded$Grade
+Market_Midpoints_Rounded
+```
+
+With the midpoints shown, one can select which midpoints they wish to build a structure based upon. My preference is to use incumbent weighted, which is fairly similar to the others, however, is one I believe provides a better assessment of the market.
+
+Considering that, the below chunk takes the midpoint for incumbent weighted and builds a structure based a constant range width (same range width used above or 40%)
+```{r Minimum & Maximum - Market by Incumbent}
+Market_Midpoints_Rounded_Inc<-as.data.frame(Market_Midpoints_Rounded[,c(3)])
+colnames(Market_Midpoints_Rounded_Inc)[1]<-"Midpoint"
+Market_Structure_Rounded<-Market_Midpoints_Rounded_Inc%>%mutate(Minimum=(Midpoint/(1+(.5*RangeWidth))))
+Market_Structure_Rounded<-mround(Market_Structure_Rounded,100)
+Market_Structure_Rounded$Maximum<-Market_Structure_Rounded$Midpoint-Market_Structure_Rounded$Minimum+Market_Structure_Rounded$Midpoint
+Market_Structure_Rounded<-Market_Structure_Rounded[,c(2,1,3)]
+Market_Structure_Rounded<-cbind(Grade_Market,Market_Structure_Rounded)
+colnames(Market_Structure_Rounded)[1]<-"Grade"
+Market_Structure_Rounded$MinCR<-round(Market_Structure_Rounded$Minimum/Market_Structure_Rounded$Midpoint,4)
+Market_Structure_Rounded$MaxCR<-round(Market_Structure_Rounded$Maximum/Market_Structure_Rounded$Midpoint,4)
+Market_Structure_Rounded
+```
+
+We can show a visualization of the range, such as was done earlier in this document.
+```{r Range Visualization - Market}
+ggplot(Market_Structure_Rounded) +
+  geom_segment( aes(x=Grade, xend=Grade, y=Minimum, yend=Maximum), color="grey") +
+  geom_point( aes(x=Grade, y=Minimum ), color="#FD5A1E", size=3,shape=23,fill="#27251F" ) +
+  geom_point( aes(x=Grade, y=Maximum ), color="#FD5A1E", size=3,shape=23,fill="#27251F" ) +
+  coord_flip()+
+  ylab("")+
+  xlab("Grade")+
+  scale_y_continuous(label=comma, breaks=seq(0,290000,20000))
+```
+
+The constant range width again is one approach, however, as noted above, many companies use a varied range width for different grades. The widths are adjusted for this market look, at 45% for grades 1-4, 60% for grade 5-8 and 75% for grades 9-12.
+
+```{r Market Minimum and Maximum with varied range widths}
+MarketRangeWidth1<-.45
+MarketRangeWidth2<-.60
+MarketRangeWidth3<-.75
+
+MarketStructure_Rounded_Var_RW<-Market_Structure_Rounded[,c(2,3,4)]
+MarketStructure_Rounded_Var_RW = MarketStructure_Rounded_Var_RW%>%
+  mutate(Minimum = ifelse(as.integer(Grade_Market)<5, Midpoint/(1+(.5*MarketRangeWidth1)),
+                          ifelse(as.integer(Grade_Market)<9,Midpoint/(1+(.5*MarketRangeWidth2)),Midpoint/(1+(.5*MarketRangeWidth3)))))
+MarketStructure_Rounded_Var_RW<-mround(MarketStructure_Rounded_Var_RW,50)
+MarketStructure_Rounded_Var_RW$Maximum<-MarketStructure_Rounded_Var_RW$Midpoint-MarketStructure_Rounded_Var_RW$Minimum+MarketStructure_Rounded_Var_RW$Midpoint
+MarketStructure_Rounded_Var_RW<-cbind(Grade_Market,MarketStructure_Rounded_Var_RW)
+colnames(MarketStructure_Rounded_Var_RW)[1]<-"Grade"
+MarketStructure_Rounded_Var_RW$MinCR<-round(MarketStructure_Rounded_Var_RW$Minimum/MarketStructure_Rounded_Var_RW$Midpoint,4)
+MarketStructure_Rounded_Var_RW$MaxCR<-round(MarketStructure_Rounded_Var_RW$Maximum/MarketStructure_Rounded_Var_RW$Midpoint,4)
+MarketStructure_Rounded_Var_RW
+```
+
+Considering the new range widths, can have a look at the structures visually. Similar to the conversation on range widths is the idea of range overlap. 
+
+Some thought is that the overlap should be minimal, with perhaps 2 grades above having overlap. As you see below, at the lower levels, this proposed structure looks to have 2 or maybe 3 levels with overlap. In the above table, you can see that with the exception of grade 2 and grade 5, all other grades do stay at the two grade overlap. However, if an approach is taken to widen the ranges from the 45%, 60%, 75%, there will be more levels that overlap. Therefore, it is a balance of having ranges that are not too restrictive, while not having them too wide which can cause concerns, such as trying to manage pay equity. 
+```{r Range Visualization Market- Varied Range Width}
+ggplot(MarketStructure_Rounded_Var_RW) +
+  geom_segment( aes(x=Grade, xend=Grade, y=Minimum, yend=Maximum), color="grey") +
+  geom_point( aes(x=Grade, y=Minimum ), color="#FD5A1E", size=3,shape=23,fill="#27251F" ) +
+  geom_point( aes(x=Grade, y=Maximum ), color="#FD5A1E", size=3,shape=23,fill="#27251F" ) +
+  coord_flip()+
+  ylab("")+
+  xlab("Grade")+
+  scale_y_continuous(label=comma, breaks=seq(0,290000,20000))
+```
+
+## Differing structure by function - Band and Level approach
+An approach that does get used in some salary structure design is functional or premium structures. Reality is, the median salary for a professional level 3 role can differ greatly depending on the type of role; some functions are paid higher than others. So taking a one size fits all approach may not be supported and a request may come in to consider a few different structures that are built to group similar functions related to salary. There is an ability to generate structures through an R script to provide the different structures. However, identifying those functions to be segmented from the 'baseline' structure is another instance where it becomes an art versus a science.
+
+A way to consider looking at this is to compare on a level role by role basis, how does the salary50th value compare to the average Salary50th by the Band_level combination. The below code provides this information and by using the 'head' function, and selecting only a few of the relevant columns, we can see in general how this approach looks. 
+```{r Find Functions Band / Level compared to overall band level median}
+PctOfMedian<-Survey%>%
+  group_by(Band_Level)%>%
+  mutate(MedianSalary_BandLevel=mean(Salary50th,na.rm = TRUE))%>%
+  ungroup()%>%
+  group_by(Job_Function,Band_Level)%>%
+  mutate(PctMedian_Func=mean(Salary50th,na.rm = TRUE)/MedianSalary_BandLevel)
+
+head(PctOfMedian[,c(2,10,25:26)])
+```
+This table shows that for Function AAA and band/level A1, the Salary50th is 34558.39 and the Median Salary for the A1 band level is 37353.76. Therefore, the AAA-A1 job is ~92.5% of the median base salary for an A1 band and level. 
+
+We can take this data and the aggregation of all functions and band / level combinations to get a sense of how that function compares.
+
+```{r aggegration of function percent of median}
+PctOfMedian_Summary<-PctOfMedian%>%
+  group_by(Job_Function)%>%
+  summarise(PctMedian_Func=mean(Salary50th/MedianSalary_BandLevel, na.rm=TRUE))%>%
+  arrange(PctMedian_Func)
+
+head(PctOfMedian_Summary)
+```
+We see that for function AHQ, in aggregation, it is 82.26% of the median Salary50th. A decision needs to be mad around how many structures are desired; should it be 3 structures with a reduced, baseline and premium? Should it be 2 with baseline and premium? For sake of this exercise, lets consider the 3 and take the approach of all functions <90% are reduced, 90%-110% are baseline and >110% are premium.
+
+First, we simply need to bring in the PctMedian_Func column into our base dataframe, Survey.
+```{r merge PctMedian into Survey}
+Survey<-merge(Survey,PctOfMedian_Summary,by="Job_Function")
+```
+
+Next, we can add a column that uses an If then statement to put in the structure name.
+
+```{r Structure Assignment}
+Survey$Structure<-ifelse(Survey$PctMedian_Func<.90,"Reduced",ifelse(Survey$PctMedian_Func<1.10,"Baseline","Premium"))
+```
+
+So structures have been assigned, by slightly modifying a code used above (by adding Structure to the Group_By line), the new structures can be seen. 
+
+```{r Build Market Midpoints - Different Structures}
+Market_Midpoints_Structures<-Survey%>%
+  group_by(Structure,Grade)%>%
+  filter(!is.na(Structure))%>%
+  summarise(SimpleAvgOf50th=mean(Salary50th,na.rm = TRUE),
+            WeightedAvgof50_Inc=weighted.mean(Salary50th, SalaryIncCount,na.rm = TRUE),
+            WeightedAvgof50_Org=weighted.mean(Salary50th, SalaryOrgCount,na.rm = TRUE))%>%
+            mutate(ProgressionSimpleAvg = (SimpleAvgOf50th / lag(SimpleAvgOf50th))-1,
+                   ProgressionWeightedInc = (WeightedAvgof50_Inc / lag(WeightedAvgof50_Inc))-1,
+                   ProgressionWeightedOrg = (WeightedAvgof50_Org / lag(WeightedAvgof50_Org))-1)
+
+Market_Midpoints_Structures
+```
+
+By doing the same exercise to these structures that was done above for the overall structure, can see smoothed midpoints and the different minimums and maximums. However, best to separate the three structures out as their own data frames.
+
+```{r}
+Market_Midpoints_Reduced<-subset(Market_Midpoints_Structures,Structure=="Reduced")
+Market_Midpoints_Baseline<-subset(Market_Midpoints_Structures,Structure=="Baseline")
+Market_Midpoints_Premium<-subset(Market_Midpoints_Structures,Structure=="Premium")
+```
+
+First, lets round the reduced structure.
+```{r Rounding the Market structure - ReducedStructure}
+Market_Midpoints_Reduced_Rounded<-mround(Market_Midpoints_Reduced[,c(3:5)],100)
+Grade_Market<-as.factor(1:12)
+Market_Midpoints_Reduced_Rounded<-cbind(Grade_Market,Market_Midpoints_Reduced_Rounded)
+colnames(Market_Midpoints_Reduced_Rounded)[1]<-"Grade"
+Market_Midpoints_Reduced_Rounded
+```
+
+Next is the baseline structure.
+```{r Rounding the Market structure - BaselineStructure}
+Market_Midpoints_Baseline_Rounded<-mround(Market_Midpoints_Baseline[,c(3:5)],100)
+Grade_Market<-as.factor(1:12)
+Market_Midpoints_Baseline_Rounded<-cbind(Grade_Market,Market_Midpoints_Baseline_Rounded)
+colnames(Market_Midpoints_Baseline_Rounded)[1]<-"Grade"
+Market_Midpoints_Baseline_Rounded
+```
+
+Last is the premium structure.
+```{r Rounding the Market structure - PremiumStructure}
+Market_Midpoints_Premium_Rounded<-mround(Market_Midpoints_Premium[,c(3:5)],100)
+Grade_Market<-as.factor(1:12)
+Market_Midpoints_Premium_Rounded<-cbind(Grade_Market,Market_Midpoints_Premium_Rounded)
+colnames(Market_Midpoints_Premium_Rounded)[1]<-"Grade"
+Market_Midpoints_Premium_Rounded
+```
+
+As the constant range width versus varied range width reviews occurred on the prior structures and the personal preference for varied, for these three new structures, simply will apply the varied range width.
+
+First - Reduced structure
+```{r Reduced Structure - Varied Width}
+MarketStructure_Reduced_Rounded_Var_RW<-as.data.frame(Market_Midpoints_Reduced_Rounded[,c(3)])
+colnames(MarketStructure_Reduced_Rounded_Var_RW)[1]<-"Midpoint"
+MarketStructure_Reduced_Rounded_Var_RW = MarketStructure_Reduced_Rounded_Var_RW%>%
+  mutate(Minimum = ifelse(as.integer(Grade_Market)<5, Midpoint/(1+(.5*MarketRangeWidth1)),
+                          ifelse(as.integer(Grade_Market)<9,Midpoint/(1+(.5*MarketRangeWidth2)),Midpoint/(1+(.5*MarketRangeWidth3)))))
+MarketStructure_Reduced_Rounded_Var_RW<-mround(MarketStructure_Reduced_Rounded_Var_RW,50)
+MarketStructure_Reduced_Rounded_Var_RW$Maximum<-MarketStructure_Reduced_Rounded_Var_RW$Midpoint-MarketStructure_Reduced_Rounded_Var_RW$Minimum+MarketStructure_Reduced_Rounded_Var_RW$Midpoint
+MarketStructure_Reduced_Rounded_Var_RW<-MarketStructure_Reduced_Rounded_Var_RW[,c(2,1,3)]
+MarketStructure_Reduced_Rounded_Var_RW<-cbind(Grade_Market,MarketStructure_Reduced_Rounded_Var_RW)
+colnames(MarketStructure_Reduced_Rounded_Var_RW)[1]<-"Grade"
+MarketStructure_Reduced_Rounded_Var_RW$MinCR<-round(MarketStructure_Reduced_Rounded_Var_RW$Minimum/MarketStructure_Reduced_Rounded_Var_RW$Midpoint,4)
+MarketStructure_Reduced_Rounded_Var_RW$MaxCR<-round(MarketStructure_Reduced_Rounded_Var_RW$Maximum/MarketStructure_Reduced_Rounded_Var_RW$Midpoint,4)
+MarketStructure_Reduced_Rounded_Var_RW
+```
+
+Next is the baseline structure
+```{r Baseline Structure - Varied Width}
+MarketStructure_Baseline_Rounded_Var_RW<-as.data.frame(Market_Midpoints_Baseline_Rounded[,c(3)])
+colnames(MarketStructure_Baseline_Rounded_Var_RW)[1]<-"Midpoint"
+MarketStructure_Baseline_Rounded_Var_RW = MarketStructure_Baseline_Rounded_Var_RW%>%
+  mutate(Minimum = ifelse(as.integer(Grade_Market)<5, Midpoint/(1+(.5*MarketRangeWidth1)),
+                          ifelse(as.integer(Grade_Market)<9,Midpoint/(1+(.5*MarketRangeWidth2)),Midpoint/(1+(.5*MarketRangeWidth3)))))
+MarketStructure_Baseline_Rounded_Var_RW<-mround(MarketStructure_Baseline_Rounded_Var_RW,50)
+MarketStructure_Baseline_Rounded_Var_RW$Maximum<-MarketStructure_Baseline_Rounded_Var_RW$Midpoint-MarketStructure_Baseline_Rounded_Var_RW$Minimum+MarketStructure_Baseline_Rounded_Var_RW$Midpoint
+MarketStructure_Baseline_Rounded_Var_RW<-MarketStructure_Baseline_Rounded_Var_RW[,c(2,1,3)]
+MarketStructure_Baseline_Rounded_Var_RW<-cbind(Grade_Market,MarketStructure_Baseline_Rounded_Var_RW)
+colnames(MarketStructure_Baseline_Rounded_Var_RW)[1]<-"Grade"
+MarketStructure_Baseline_Rounded_Var_RW$MinCR<-round(MarketStructure_Baseline_Rounded_Var_RW$Minimum/MarketStructure_Baseline_Rounded_Var_RW$Midpoint,4)
+MarketStructure_Baseline_Rounded_Var_RW$MaxCR<-round(MarketStructure_Baseline_Rounded_Var_RW$Maximum/MarketStructure_Baseline_Rounded_Var_RW$Midpoint,4)
+MarketStructure_Baseline_Rounded_Var_RW
+```
+
+Last is the premium structure
+```{r Premium Structure - Varied Width}
+MarketStructure_Premium_Rounded_Var_RW<-as.data.frame(Market_Midpoints_Premium_Rounded[,c(3)])
+colnames(MarketStructure_Premium_Rounded_Var_RW)[1]<-"Midpoint"
+MarketStructure_Premium_Rounded_Var_RW = MarketStructure_Premium_Rounded_Var_RW%>%
+  mutate(Minimum = ifelse(as.integer(Grade_Market)<5, Midpoint/(1+(.5*MarketRangeWidth1)),
+                          ifelse(as.integer(Grade_Market)<9,Midpoint/(1+(.5*MarketRangeWidth2)),Midpoint/(1+(.5*MarketRangeWidth3)))))
+MarketStructure_Premium_Rounded_Var_RW<-mround(MarketStructure_Premium_Rounded_Var_RW,50)
+MarketStructure_Premium_Rounded_Var_RW$Maximum<-MarketStructure_Premium_Rounded_Var_RW$Midpoint-MarketStructure_Premium_Rounded_Var_RW$Minimum+MarketStructure_Premium_Rounded_Var_RW$Midpoint
+MarketStructure_Premium_Rounded_Var_RW<-MarketStructure_Premium_Rounded_Var_RW[,c(2,1,3)]
+MarketStructure_Premium_Rounded_Var_RW<-cbind(Grade_Market,MarketStructure_Premium_Rounded_Var_RW)
+colnames(MarketStructure_Premium_Rounded_Var_RW)[1]<-"Grade"
+MarketStructure_Premium_Rounded_Var_RW$MinCR<-round(MarketStructure_Premium_Rounded_Var_RW$Minimum/MarketStructure_Premium_Rounded_Var_RW$Midpoint,4)
+MarketStructure_Premium_Rounded_Var_RW$MaxCR<-round(MarketStructure_Premium_Rounded_Var_RW$Maximum/MarketStructure_Premium_Rounded_Var_RW$Midpoint,4)
+MarketStructure_Premium_Rounded_Var_RW
+```
