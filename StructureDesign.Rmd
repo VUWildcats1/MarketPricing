@@ -5,8 +5,8 @@ author: |
   | https://www.nathanwollack.com/
         
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 description: Generate some helpful outputs to review and assess a new or revised salary
   structure, based upon market data.
 ---
