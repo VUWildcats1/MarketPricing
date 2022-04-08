@@ -39,7 +39,7 @@ install.packages("scales", repos = "http://cran.us.r-project.org")
 
 This chunk of code will now load the packages just installed, for use in R.
 ```{r load the desired packages, message=FALSE,results='hide'}
-library(openxlsx) #Used to read in Excel documents
+library(readxl) #Used to read in Excel documents
 library(dplyr) #Used to do data manipulation
 library(ggplot2) #used for visualization design
 library(stringr) #used for visualization design
